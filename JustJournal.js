@@ -146,77 +146,88 @@ if (window.widget) {
 }
 
 
+var apiURL = "https://www.justjournal.com/api";
+
+// "Not Specified" mood and location ids on the server
+var MOOD_NOT_SPECIFIED = 12;
+var LOCATION_NOT_SPECIFIED = 0;
+
+function setStatus(message)
+{
+	document.getElementById('status').innerText = message;
+}
+
+// Sends data as a JSON body and passes the request to onDone when it finishes
+function postJSON(url, data, onDone)
+{
+	var xmlRequest = new XMLHttpRequest();
+	xmlRequest.onload = function() { onDone(xmlRequest); };
+	xmlRequest.onerror = function() { setStatus("Could not reach JustJournal"); };
+	xmlRequest.open("POST", url);
+	xmlRequest.setRequestHeader("Content-Type", "application/json");
+	xmlRequest.setRequestHeader("Accept", "application/json");
+	xmlRequest.setRequestHeader("Cache-Control", "no-cache");
+	xmlRequest.send(JSON.stringify(data));
+}
+
+function parseResponse(xmlRequest)
+{
+	try {
+		return JSON.parse(xmlRequest.responseText);
+	} catch (e) {
+		return {};
+	}
+}
+
 function myPost(event)
 {
 	var user = widget.preferenceForKey(widget.identifier + "-" + "user");
 	var pass = widget.preferenceForKey(widget.identifier + "-" + "pass");
 	var security =  widget.preferenceForKey(widget.identifier + "-" + "security");
-    // "2005-09-30 16:18:26"
-	var d = new Date();
-	var curr_date = d.getDate();
-	var curr_month = d.getMonth();
-	var curr_year = d.getFullYear();
-	var curr_hour = d.getHours();
-	var curr_min = d.getMinutes();
-	var curr_sec = d.getSeconds();
-	curr_month++; // zero based
-	
+
 	if (user == null || pass == null) {
-	    document.getElementById('status').innerHTML = "Please set your username and password.";
+	    setStatus("Please set your username and password.");
 	    return;
 	}
-	
-	var websiteURL = "https://www.justjournal.com/updateJournal"
-	 + "?user=" + encodeURIComponent(user) + "&pass=" + encodeURIComponent(pass) +
-	 "&security=" + security +"&mood=12&location=0&client=dash" +
-	 "&date=" + curr_year + "-";
-	
-	 if ( curr_month < 10 )
-	     websiteURL = websiteURL + "0";
-		  
-	websiteURL = websiteURL + curr_month + "-" + curr_date +
-	 " " + curr_hour + ":" + curr_min + ":" + curr_sec;
-	 
-	websiteURL = websiteURL + "&subject=" + encodeURIComponent(txtSubject.value) + 
-	"&body=" + encodeURIComponent(txtBody.value);
-	
-	var onloadHandler = function() { xmlLoaded(xmlRequest); };	// The function to call when the feed is loaded; currently calls the XMLHttpRequest load snippet
 
-	// XMLHttpRequest setup code
-	var xmlRequest = new XMLHttpRequest();
-	xmlRequest.onload = onloadHandler;
-	xmlRequest.open("GET", websiteURL);
-	xmlRequest.setRequestHeader("Cache-Control", "no-cache");
-	xmlRequest.send(null);
+	var entry = {
+		subject: txtSubject.value,
+		body: txtBody.value,
+		security: security,
+		mood: MOOD_NOT_SPECIFIED,
+		location: LOCATION_NOT_SPECIFIED
+	};
+
+	// log in first; the session cookie it sets authorizes the entry post
+	postJSON(apiURL + "/login", { username: user, password: pass }, function(xmlRequest) {
+		var login = parseResponse(xmlRequest);
+
+		if (login.status == "JJ.LOGIN.OK") {
+			postJSON(apiURL + "/entry", entry, entryLoaded);
+		} else if (login.status == "JJ.LOGIN.2FA") {
+			setStatus("Two-factor login is not supported by this widget");
+		} else if (xmlRequest.status == 401 || login.status == "JJ.LOGIN.FAIL") {
+			setStatus("Invalid user or password");
+		} else {
+			setStatus("Error " + xmlRequest.status + " logging in");
+		}
+	});
 }
 
-// Called when an XMLHttpRequest loads a feed; works with the XMLHttpRequest setup snippet
-function xmlLoaded(xmlRequest) 
+// Called when the entry post finishes
+function entryLoaded(xmlRequest)
 {
-    var response = xmlRequest.reponseText;
-    
-	if (xmlRequest.status == 200) {
-		// Parse and interpret results
-		// XML results found in xmlRequest.responseXML
-		// Text results found in xmlRequest.reponseText
-		
-		if (response != null) {		
-		    if (response.indexOf("JJ.LOGIN.FAIL") > -1) {
-		        // We had an error logging in
-		        document.getElementById('status').innerHTML = "Invalid user or password";
-		        return;
-		    }
-		    document.getElementById('status').innerHTML = response;
-		} else {
-		     document.getElementById('status').innerHTML = "";
-		}
-		
+	var response = parseResponse(xmlRequest);
+
+	if (xmlRequest.status == 200 && response.status == "ok") {
+		setStatus("Entry posted");
+
 		//clear submitted values
 		txtSubject.value = "";
 		txtBody.value = "";
 	}
 	else {
-	    response = "Error " + xmlRequest.status + " : " + response;
-	    document.getElementById('status').innerHTML = response;
+	    var message = response.error != null ? response.error : xmlRequest.responseText;
+	    setStatus("Error " + xmlRequest.status + " : " + message);
 	}
 }
